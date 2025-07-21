@@ -25,23 +25,23 @@ def main():
     filesize = os.path.getsize(FILENAME)
 
     # Calcular MD5 do arquivo original
-    logging.info("[+] Calculating MD5 checksum...")
+    logging.info("CLIENT: [+] Calculating MD5 checksum...")
     original_md5 = calculate_md5(FILENAME)
     if not original_md5:
         logging.error("[!] Failed to calculate MD5")
         return
 
-    logging.info(f"[+] File: {FILENAME}, Size: {FILESIZE} bytes")
+    logging.info(f"CLIENT: [+] File: {FILENAME}, Size: {FILESIZE} bytes")
     
     try:
         client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         client.connect(ADDR)
-        logging.info(f"[+] Connected to server {SERVER}:{PORT}")
+        logging.info(f"CLIENT: [+] Connected to server {SERVER}:{PORT}")
 
         """ Sending filename, filesize and checksum to the server. """
         data = f"{FILENAME}@{FILESIZE}@{original_md5}"
         client.send(data.encode(FORMAT))
-        logging.info(f"[+] Sent filename, filesize and MD5: {data}")
+        logging.info(f"CLIENT: [+] Sent filename, filesize and MD5: {data}")
         
         # Receive confirmation from server
         msg = client.recv(SIZE).decode(FORMAT)
