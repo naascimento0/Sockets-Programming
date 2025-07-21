@@ -5,6 +5,7 @@ import logging
 from checksum import calculate_md5
 import threading
 from auth import authenticate
+import queue
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -15,22 +16,12 @@ SIZE = 1024  # Increased buffer size for better data transfer
 CHUNK_SIZE = 16  # Size for file data chunks
 FORMAT = 'utf-8'
 
+# Priority queue for client connections
+client_queue = queue.PriorityQueue()
+
 def handle_client(conn, addr):
     """ Handle a single client connection """
     try:
-        logging.info(f"SERVER: [+] Client conneced from {addr[0]}:{addr[1]}")
-
-        # Receiving and checking credentials
-        credentials = conn.recv(SIZE).decode(FORMAT)
-        logging.info(f"SERVER: [+] Received credentials: {credentials}")
-        
-        if not authenticate(credentials):
-            logging.error(f"SERVER: [!] Authentication failed for {addr[0]}:{addr[1]}")
-            conn.send("AUTH_FAILED".encode(FORMAT))
-            return
-        conn.send("AUTH_OK".encode(FORMAT))
-        logging.info(f"SERVER: [+] Authentication successful for {addr[0]}:{addr[1]}")
-
         # Receiving the filename, filesize and checksum from the client
         data = conn.recv(SIZE).decode(FORMAT)
         logging.info(f"SERVER: [+] Received data: {data}")
@@ -100,6 +91,18 @@ def handle_client(conn, addr):
     finally:
         conn.close()
         logging.info(f"[+] Connection closed for {addr[0]}:{addr[1]}")
+
+def process_client_queue():
+    """ Process clients from the priority queue """
+    while True:
+        try:
+            # Get client from queue (blocks until there is an item)
+            priority, conn, addr = client_queue.get()
+            logging.info(f"[+] Processing client {addr[0]}:{addr[1]} with priority {priority}")
+            handle_client(conn, addr)
+            client_queue.task_done()
+        except Exception as e:
+            logging.error(f"[!] Error processing client queue: {e}")
         
 def main():
     """ Creating a TCP server socket """
@@ -109,14 +112,32 @@ def main():
     server.listen()
     logging.info(f"[+] Server listening on {SERVER}:{PORT}")
 
+    """ Start thread to process client queue """
+    queue_thread = threading.Thread(target=process_client_queue, daemon=True)
+    queue_thread.start()
+
     """ Accepting connections from clients """
     try:
         while True:
             conn, addr = server.accept()
-            # Start a new thread for each client
-            thread = threading.Thread(target=handle_client, args=(conn, addr))
-            thread.start()
-            logging.info(f"[+] Active threads: {threading.active_count() - 1}")
+            logging.info(f"SERVER: [+] Client connected from {addr[0]}:{addr[1]}")
+
+            # Receive credentials to determine priority
+            credentials = conn.recv(SIZE).decode(FORMAT)
+            logging.info(f"SERVER: [+] Received credentials: {credentials}")
+            
+            auth_success, priority = authenticate(credentials)
+            if not auth_success:
+                logging.error(f"SERVER: [!] Authentication failed for {addr[0]}:{addr[1]}")
+                conn.send("AUTH_FAILED".encode(FORMAT))
+                conn.close()
+                continue
+            conn.send("AUTH_OK".encode(FORMAT))
+            logging.info(f"SERVER: [+] Authentication successful for {addr[0]}:{addr[1]}, Priority: {priority}")
+
+            # Add client to priority queue
+            client_queue.put((priority, conn, addr))
+            logging.info(f"[+] Client {addr[0]}:{addr[1]} added to queue. Queue size: {client_queue.qsize()}")
     
     except KeyboardInterrupt:
         logging.info("[+] Server shutting down...")
