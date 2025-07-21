@@ -15,6 +15,9 @@ FORMAT = 'utf-8'
 FILENAME = "big_file.txt"
 FILESIZE = os.path.getsize(FILENAME)
 
+USERNAME = "admin"  # Fixed credentials for testing
+PASSWORD = "admin123"
+
 def main():
     """ TCP socket and connecting to the server """
     # Check if file exists
@@ -24,7 +27,7 @@ def main():
     
     filesize = os.path.getsize(FILENAME)
 
-    # Calcular MD5 do arquivo original
+    # Calculate MD5 of original file
     logging.info("CLIENT: [+] Calculating MD5 checksum...")
     original_md5 = calculate_md5(FILENAME)
     if not original_md5:
@@ -37,6 +40,18 @@ def main():
         client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         client.connect(ADDR)
         logging.info(f"CLIENT: [+] Connected to server {SERVER}:{PORT}")
+
+        """ Sending credentials """
+        credentials = f"{USERNAME}:{PASSWORD}"
+        client.send(credentials.encode(FORMAT))
+        logging.info(f"CLIENT: [+] Sent credentials: {credentials}")
+
+        """ Receive authentication response """
+        auth_response = client.recv(SIZE).decode(FORMAT)
+        logging.info(f"CLIENT: [+] SERVER: {auth_response}")
+        if auth_response != "AUTH_OK":
+            logging.error("[!] Authentication failed")
+            return
 
         """ Sending filename, filesize and checksum to the server. """
         data = f"{FILENAME}@{FILESIZE}@{original_md5}"

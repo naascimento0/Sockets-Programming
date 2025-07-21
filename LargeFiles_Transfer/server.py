@@ -4,6 +4,7 @@ from tqdm import tqdm
 import logging
 from checksum import calculate_md5
 import threading
+from auth import authenticate
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -18,6 +19,17 @@ def handle_client(conn, addr):
     """ Handle a single client connection """
     try:
         logging.info(f"SERVER: [+] Client conneced from {addr[0]}:{addr[1]}")
+
+        # Receiving and checking credentials
+        credentials = conn.recv(SIZE).decode(FORMAT)
+        logging.info(f"SERVER: [+] Received credentials: {credentials}")
+        
+        if not authenticate(credentials):
+            logging.error(f"SERVER: [!] Authentication failed for {addr[0]}:{addr[1]}")
+            conn.send("AUTH_FAILED".encode(FORMAT))
+            return
+        conn.send("AUTH_OK".encode(FORMAT))
+        logging.info(f"SERVER: [+] Authentication successful for {addr[0]}:{addr[1]}")
 
         # Receiving the filename, filesize and checksum from the client
         data = conn.recv(SIZE).decode(FORMAT)
