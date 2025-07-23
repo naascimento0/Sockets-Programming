@@ -17,9 +17,9 @@ SIZE = 1024
 CHUNK_SIZE = 1024 * 50   # 50KB - same as the server
 BLOCK_SIZE = 1024 * 200  # 200KB - same as the server
 FORMAT = 'utf-8'
-FILENAME = "big_file.txt"
+FILENAME = "input/big_file.txt"
 FILESIZE = os.path.getsize(FILENAME) if os.path.exists("big_file.txt") else 0
-MAX_PARALLEL_BLOCKS = 3
+MAX_PARALLEL_BLOCKS = 4
 
 USERNAME = "admin"  # Fixed credentials for testing
 PASSWORD = "admin123"
@@ -53,11 +53,11 @@ def send_file_block(block_id, start_pos, block_size, filename, original_md5, tot
         
         # Send block data
         with open(filename, "rb") as f:
-            f.seek(start_pos)
+            f.seek(start_pos) # Move to the start of the block
             sent_bytes = 0
             
             while sent_bytes < block_size:
-                chunk_size = min(CHUNK_SIZE, block_size - sent_bytes)
+                chunk_size = min(CHUNK_SIZE, block_size - sent_bytes) # 50KB
                 data = f.read(chunk_size)
                 
                 if not data:
@@ -152,10 +152,10 @@ def main():
         # Send blocks in parallel
         successful_blocks = 0
         failed_blocks = []
-        
-        with ThreadPoolExecutor(max_workers=MAX_PARALLEL_BLOCKS) as executor:
+
+        with ThreadPoolExecutor(max_workers=MAX_PARALLEL_BLOCKS) as executor: # Create up to 4 simultaneous threads
             # Create progress bar for overall transfer
-            progress_bar = tqdm(total=filesize, desc="Sending blocks", unit="B", unit_scale=True)
+            progress_bar = tqdm(total=filesize, desc="\nSending blocks", unit="B", unit_scale=True)
             
             # Submit all block transfer tasks
             future_to_block = {
@@ -185,22 +185,23 @@ def main():
         
         if failed_blocks:
             logging.error(f"[!] Failed blocks: {failed_blocks}")
-            coordinator.send("TRANSFER_FAILED".encode(FORMAT))
-        else:
-            # Signal transfer completion
-            coordinator.send("TRANSFER_COMPLETE".encode(FORMAT))
             
-            # Receive final integrity check result
-            try:
-                integrity_result = coordinator.recv(SIZE).decode(FORMAT)
-                if "INTEGRITY_OK" in integrity_result:
-                    logging.info("[+] Server confirmed file integrity (checksum) is OK! ✅")
-                elif "INTEGRITY_FAILED" in integrity_result:
-                    logging.error("[!] Server reported file integrity (checksum) failure! ❌")
-                else:
-                    logging.warning(f"[?] Unknown integrity response: {integrity_result}")
-            except Exception as e:
-                logging.error(f"[!] Error receiving integrity result: {e}")
+        # Always signal transfer completion (even with failures) to let server verify integrity
+        coordinator.send("TRANSFER_COMPLETE".encode(FORMAT))
+        
+        # Receive final integrity check result
+        try:
+            integrity_result = coordinator.recv(SIZE).decode(FORMAT)
+            if "INTEGRITY_OK" in integrity_result:
+                logging.info("[+] Server confirmed file integrity (checksum) is OK! ✅")
+            elif "INTEGRITY_FAILED" in integrity_result:
+                logging.error("[!] Server reported file integrity (checksum) failure! ❌")
+            elif "ASSEMBLY_FAILED" in integrity_result:
+                logging.error("[!] Server could not assemble file! ❌")
+            else:
+                logging.warning(f"[?] Unknown integrity response: {integrity_result}")
+        except Exception as e:
+            logging.error(f"[!] Error receiving integrity result: {e}")
         
         coordinator.close()
         

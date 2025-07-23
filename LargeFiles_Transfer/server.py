@@ -11,6 +11,18 @@ import sys
 import time
 from collections import defaultdict
 
+# ANSI color codes for terminal output
+class Colors:
+    RESET = '\033[0m'
+    BOLD = '\033[1m'
+    RED = '\033[91m'
+    GREEN = '\033[92m'
+    YELLOW = '\033[93m'
+    BLUE = '\033[94m'
+    MAGENTA = '\033[95m'
+    CYAN = '\033[96m'
+    WHITE = '\033[97m'
+
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 SERVER = socket.gethostbyname(socket.gethostname())
@@ -47,10 +59,10 @@ file_transfers = defaultdict(lambda: {
 def handle_file_coordinator(conn, addr, filename, filesize, total_blocks, original_md5):
     """Handle the main file transfer coordination"""
     thread_id = threading.current_thread().ident
-    transfer_key = f"{addr[0]}_{addr[1]}_{filename}" # Example: "192.168.1.100_54321_big_file.txt"
+    transfer_key = f"{addr[0]}_{filename}" # Use only IP + filename
     
     try:
-        logging.info(f"[Thread {thread_id}] Coordinating file transfer: {filename}")
+        logging.info(f"{Colors.CYAN}[COORDINATOR]{Colors.RESET} Starting transfer: {Colors.BOLD}{filename}{Colors.RESET} ({filesize} bytes, {total_blocks} blocks)\n")
         
         # Initialize transfer metadata
         with file_transfers[transfer_key]['lock']:
@@ -70,10 +82,10 @@ def handle_file_coordinator(conn, addr, filename, filesize, total_blocks, origin
             try:
                 signal = conn.recv(SIZE).decode(FORMAT)
                 if "TRANSFER_COMPLETE" in signal:
-                    logging.info(f"[Thread {thread_id}] Received transfer completion signal")
+                    logging.info(f"{Colors.CYAN}[COORDINATOR]{Colors.RESET} Transfer complete signal received")
                     break
                 elif "TRANSFER_FAILED" in signal:
-                    logging.error(f"[Thread {thread_id}] Client reported transfer failure")
+                    logging.error(f"{Colors.CYAN}[COORDINATOR]{Colors.RESET} {Colors.RED}Transfer failed signal received{Colors.RESET}")
                     return
                 else:
                     time.sleep(0.1)  # Short delay before checking again
@@ -84,34 +96,50 @@ def handle_file_coordinator(conn, addr, filename, filesize, total_blocks, origin
                 return
         
         # Assemble file from blocks
-        logging.info(f"[Thread {thread_id}] Assembling file from {total_blocks} blocks...")
-        assembled_filename = f"server_received_{addr[0]}_{addr[1]}_{filename}"
+        logging.info(f"{Colors.CYAN}[COORDINATOR]{Colors.RESET} Assembling file from {total_blocks} blocks...")
         
+        # Ensure output directory exists
+        output_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "output")
+        os.makedirs(output_dir, exist_ok=True)
+        
+        # Extract just the filename from path (e.g., "input/big_file.txt" -> "big_file.txt")
+        base_filename = os.path.basename(filename)
+        assembled_filename = os.path.join(output_dir, f"server_received_{addr[0]}_{addr[1]}_{base_filename}")
+
         success = assemble_file_from_blocks(transfer_key, assembled_filename, total_blocks)
-        
-        if success:
+
+        if success == True or success == "partial":  # Always verify integrity, even for partial files
             # Verify file integrity
-            logging.info(f"[Thread {thread_id}] Verifying file integrity...")
+            logging.info(f"{Colors.CYAN}[COORDINATOR]{Colors.RESET} Verifying file integrity...")
             received_md5 = calculate_md5(assembled_filename)
             
             if received_md5 == original_md5:
-                logging.info(f"[Thread {thread_id}] ✅ FILE INTEGRITY VERIFIED! Checksums match.")
+                logging.info(f"{Colors.CYAN}[COORDINATOR]{Colors.RESET} {Colors.GREEN}✅ File integrity verified - checksums match{Colors.RESET}")
+                if success == "partial":
+                    logging.info(f"{Colors.CYAN}[COORDINATOR]{Colors.RESET} {Colors.YELLOW}🎉 Amazing! File is complete despite reported missing blocks!{Colors.RESET}")
                 conn.send("INTEGRITY_OK".encode(FORMAT))
-            else:
-                logging.error(f"[Thread {thread_id}] ❌ FILE INTEGRITY FAILED! Checksums don't match.")
-                logging.error(f"[Thread {thread_id}] Expected: {original_md5}")
-                logging.error(f"[Thread {thread_id}] Received: {received_md5}")
-                conn.send("INTEGRITY_FAILED".encode(FORMAT))
-        else:
-            conn.send("ASSEMBLY_FAILED".encode(FORMAT))
             
+            else:
+                if success == "partial":
+                    logging.error(f"{Colors.CYAN}[COORDINATOR]{Colors.RESET} {Colors.RED}❌ File integrity failed - missing blocks affected checksum{Colors.RESET}")
+                else:
+                    logging.error(f"{Colors.CYAN}[COORDINATOR]{Colors.RESET} {Colors.RED}❌ File integrity failed - checksums don't match (corruption detected){Colors.RESET}")     
+                conn.send("INTEGRITY_FAILED".encode(FORMAT))
+
+            logging.error(f"{Colors.CYAN}[COORDINATOR]{Colors.RESET} Expected: {original_md5}")
+            logging.error(f"{Colors.CYAN}[COORDINATOR]{Colors.RESET} Received: {received_md5}")
+
+        else:
+            logging.error(f"{Colors.CYAN}[COORDINATOR]{Colors.RESET} {Colors.RED}❌ File assembly completely failed{Colors.RESET}")
+            conn.send("ASSEMBLY_FAILED".encode(FORMAT))
+
     except Exception as e:
         logging.error(f"[Thread {thread_id}] Coordinator error: {e}")
     finally:
         # Cleanup transfer metadata
         if transfer_key in file_transfers:
             del file_transfers[transfer_key]
-        logging.info(f"[Thread {thread_id}] File coordinator finished")
+        logging.info(f"{Colors.CYAN}[COORDINATOR]{Colors.RESET} Transfer finished for {Colors.BOLD}{filename}{Colors.RESET}")
 
 # Multiple threads
 # This function receives a specific block of the file (e.g., Block 2 from 0-200KB) divided into smaller chunks (50KB each), allowing parallel transfer with other threads.
@@ -125,11 +153,11 @@ def handle_block_transfer(conn, addr, filename, block_id, start_pos, block_size,
     """Handle individual block transfer"""
     import math
     thread_id = threading.current_thread().ident
-    transfer_key = f"{addr[0]}_{addr[1]}_{filename}" # Same key as in coordinator
+    transfer_key = f"{addr[0]}_{filename}" # Use only IP + filename, ignore port
     
     try:
         expected_chunks = math.ceil(block_size / CHUNK_SIZE)
-        logging.info(f"[Thread {thread_id}] Receiving block {block_id}/{total_blocks-1} ({expected_chunks} chunks expected)")
+        logging.info(f"{Colors.BLUE}[BLOCK {block_id}]{Colors.RESET} Receiving {block_size} bytes ({expected_chunks} chunks)\n")
         
         # Aumentar timeout para blocos com mais chunks
         conn.settimeout(45.0)
@@ -147,7 +175,7 @@ def handle_block_transfer(conn, addr, filename, block_id, start_pos, block_size,
                 logging.warning(f"[Thread {thread_id}] No data received for block {block_id}")
                 conn.send("NACK".encode(FORMAT))
                 break
-                
+
             if len(data) != chunk_size:
                 logging.error(f"[Thread {thread_id}] Chunk size mismatch: expected {chunk_size}, got {len(data)}")
                 conn.send("NACK".encode(FORMAT))
@@ -156,8 +184,8 @@ def handle_block_transfer(conn, addr, filename, block_id, start_pos, block_size,
             block_data.extend(data)
             received_bytes += len(data)
                     
-            conn.send("ACK".encode(FORMAT))  # ACK only for valid chunks
-            time.sleep(0.2)
+            conn.send("ACK".encode(FORMAT))  # ACK for valid chunks
+            time.sleep(0.1) 
         
         if received_bytes == block_size:
             # Store block in transfer metadata
@@ -165,11 +193,12 @@ def handle_block_transfer(conn, addr, filename, block_id, start_pos, block_size,
                 file_transfers[transfer_key]['blocks'][block_id] = bytes(block_data)
                 file_transfers[transfer_key]['received_blocks'] += 1
                 current_blocks = file_transfers[transfer_key]['received_blocks'] # How many blocks have been received so far
+                
+                logging.info(f"{Colors.BLUE}[BLOCK {block_id}]{Colors.RESET} {Colors.GREEN}✅ Complete ({current_blocks}/{total_blocks}){Colors.RESET}")
             
-            logging.info(f"[Thread {thread_id}] ✅ Block {block_id} COMPLETED! ({current_blocks}/{total_blocks} blocks total)\n")
             conn.send("BLOCK_OK".encode(FORMAT))
         else:
-            logging.error(f"[Thread {thread_id}] ❌ Block {block_id} size mismatch: expected {block_size}, got {received_bytes}\n")
+            logging.error(f"{Colors.BLUE}[BLOCK {block_id}]{Colors.RESET} {Colors.RED}❌ Size mismatch: expected {block_size}, got {received_bytes}{Colors.RESET}")
             conn.send("BLOCK_ERROR".encode(FORMAT))
             
     except Exception as e:
@@ -178,10 +207,12 @@ def handle_block_transfer(conn, addr, filename, block_id, start_pos, block_size,
 
 # Example:
 # transfer_key = "192.168.1.100_12345_big_file.txt"
-# output_filename = "server_received_192.168.1.100_12345_big_file.txt"  
+# output_filename = "output/server_received_192.168.1.100_12345_big_file.txt"
 # total_blocks = 5  # 1MB file ÷ 200KB = 5 blocks
 def assemble_file_from_blocks(transfer_key, output_filename, total_blocks):
     """Assemble the complete file from received blocks"""
+    missing_blocks = []
+    
     try:
         with open(output_filename, "wb") as f:
             for block_id in range(total_blocks):
@@ -189,11 +220,21 @@ def assemble_file_from_blocks(transfer_key, output_filename, total_blocks):
                     block_data = file_transfers[transfer_key]['blocks'][block_id] # Get the block data
                     f.write(block_data) # Write the block data to the file
                 else:
-                    logging.error(f"Missing block {block_id} for {transfer_key}")
-                    return False
+                    # Fill missing block with zeros to maintain file structure
+                    missing_blocks.append(block_id)
+                    if block_id == total_blocks - 1:  # Last block might be smaller
+                        expected_size = file_transfers[transfer_key]['filesize'] - (block_id * BLOCK_SIZE)
+                    else:
+                        expected_size = BLOCK_SIZE
+                    f.write(b'\x00' * expected_size)  # Fill with zeros
         
-        logging.info(f"File {output_filename} assembled successfully from {total_blocks} blocks")
-        return True
+        if missing_blocks:
+            logging.warning(f"{Colors.YELLOW}⚠️  File assembled with missing blocks: {missing_blocks}{Colors.RESET}")
+            logging.info(f"{Colors.YELLOW}📄 File created: {Colors.BOLD}{output_filename}{Colors.RESET} {Colors.YELLOW}(partial - {len(missing_blocks)} blocks missing){Colors.RESET}\n")
+            return "partial"  # Return partial instead of False
+        else:
+            logging.info(f"{Colors.GREEN}✅ File assembled: {Colors.BOLD}{output_filename}{Colors.RESET} {Colors.GREEN}({total_blocks} blocks){Colors.RESET}\n")
+            return True
         
     except Exception as e:
         logging.error(f"Error assembling file: {e}")
@@ -202,12 +243,10 @@ def assemble_file_from_blocks(transfer_key, output_filename, total_blocks):
 def handle_client(conn, addr):
     """ Handle a single client connection """
     thread_id = threading.current_thread().ident
-    logging.info(f"[Thread {thread_id}] Started handling client {addr[0]}:{addr[1]}")
     
     try:
         # Receiving the data from the client
         data = conn.recv(SIZE).decode(FORMAT)
-        logging.info(f"[Thread {thread_id}] SERVER: [+] Received data: {data}")
 
         if "@" not in data:
             logging.error(f"[Thread {thread_id}] [!] Invalid data format received")
@@ -225,7 +264,6 @@ def handle_client(conn, addr):
                 total_blocks = int(parts[3]) # 5 blocks
                 original_md5 = parts[4] # "abc123..."
 
-                logging.info(f"[Thread {thread_id}] File coordination: {filename}, {filesize} bytes, {total_blocks} blocks")
                 handle_file_coordinator(conn, addr, filename, filesize, total_blocks, original_md5)
                 
             except (IndexError, ValueError) as e:
@@ -242,7 +280,6 @@ def handle_client(conn, addr):
                 total_blocks = int(parts[5]) # 5 blocks total
                 original_md5 = parts[6]    # "abc123..."
                 
-                logging.info(f"[Thread {thread_id}] Block transfer: {filename}, block {block_id}")
                 handle_block_transfer(conn, addr, filename, block_id, start_pos, block_size, total_blocks, original_md5)
                 
             except (IndexError, ValueError) as e:
@@ -260,7 +297,6 @@ def handle_client(conn, addr):
             conn.close()
         except:
             pass
-        logging.info(f"[Thread {thread_id}] [+] Connection closed for {addr[0]}:{addr[1]}")
 
 def process_client_queue():
     """ Process clients from the priority queue using a thread pool, allowing multiple clients to be served simultaneously. """
@@ -268,13 +304,13 @@ def process_client_queue():
     
     try:
         executor = ThreadPoolExecutor(max_workers=MAX_WORKERS, thread_name_prefix="ClientHandler")
-        logging.info(f"[+] Thread pool initialized with {MAX_WORKERS} workers")
+        logging.info(f"{Colors.MAGENTA}[THREAD POOL]{Colors.RESET} Initialized with {MAX_WORKERS} workers\n")
         
         while not shutdown_event.is_set(): # Continuously process clients until shutdown event is set
             try:
                 # Get client from queue with timeout to check shutdown event
                 priority, conn, addr = client_queue.get(timeout=1.0)
-                logging.info(f"[+] Processing client {addr[0]}:{addr[1]} with priority {priority}")
+                logging.info(f"{Colors.YELLOW}[QUEUE]{Colors.RESET} Processing {Colors.BOLD}{addr[0]}:{addr[1]}{Colors.RESET} (Priority: {Colors.YELLOW}{priority}{Colors.RESET})\n")
                 
                 # Submit client handling to thread pool
                 future = executor.submit(handle_client, conn, addr)
@@ -289,9 +325,9 @@ def process_client_queue():
         logging.error(f"[!] Critical error in client queue processor: {e}")
     finally:
         if executor:
-            logging.info("[+] Shutting down thread pool...")
+            logging.info(f"{Colors.MAGENTA}[THREAD POOL]{Colors.RESET} Shutting down...")
             executor.shutdown(wait=True)
-            logging.info("[+] Thread pool shutdown complete")
+            logging.info(f"{Colors.MAGENTA}[THREAD POOL]{Colors.RESET} Shutdown complete")
 
 def signal_handler(signum, frame):
     """ Handle shutdown signals gracefully """
@@ -346,12 +382,11 @@ def main():
                     conn.close()
                     break
                     
-                logging.info(f"SERVER: [+] Client connected from {addr[0]}:{addr[1]}")
+                    logging.info(f"SERVER: [+] Client connected from {addr[0]}:{addr[1]}")
 
                 # Receive credentials to determine priority
                 try:
                     credentials = conn.recv(SIZE).decode(FORMAT)
-                    logging.info(f"SERVER: [+] Received credentials: {credentials}")
                     
                     auth_success, priority = authenticate(credentials)
                     if not auth_success:
@@ -361,12 +396,11 @@ def main():
                         continue
                         
                     conn.send("AUTH_OK".encode(FORMAT))
-                    logging.info(f"SERVER: [+] Authentication successful for {addr[0]}:{addr[1]}, Priority: {priority}")
+                    logging.info(f"SERVER: [+] Auth OK {Colors.BOLD}{addr[0]}:{addr[1]}{Colors.RESET} (Priority: {Colors.YELLOW}{priority}{Colors.RESET})")
 
                     # Add client to priority queue
                     client_queue.put((priority, conn, addr))
-                    logging.info(f"[+] Client {addr[0]}:{addr[1]} added to queue. Queue size: {client_queue.qsize()}")
-                    
+                    logging.info(f"[+] Client added to queue. Size: {Colors.BOLD}{client_queue.qsize()}{Colors.RESET}\n")                
                 except socket.timeout:
                     logging.warning(f"[!] Timeout receiving credentials from {addr[0]}:{addr[1]}")
                     conn.close()
