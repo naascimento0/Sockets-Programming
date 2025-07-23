@@ -56,14 +56,42 @@ CLIENT                                 SERVER
 
 ```
 Arquivo Original (2MB)
-├─ Block 0: 0-200KB     ├─ Chunk 0: 0-50KB
-│                       ├─ Chunk 1: 50-100KB
-│                       ├─ Chunk 2: 100-150KB
-│                       └─ Chunk 3: 150-200KB
+├─ Block 0: 0-200KB     ├─ Chunk 0: 0-50KB    ← ACK/NACK
+│                       ├─ Chunk 1: 50-100KB  ← ACK/NACK
+│                       ├─ Chunk 2: 100-150KB ← ACK/NACK
+│                       └─ Chunk 3: 150-200KB ← ACK/NACK
 ├─ Block 1: 200-400KB   └─ (4 chunks de 50KB)
 ├─ Block 2: 400-600KB   └─ (4 chunks de 50KB)
 └─ Block 3: 600-800KB   └─ (4 chunks de 50KB)
 ```
+
+### Sistema NACK (Negative Acknowledgment)
+
+O sistema implementa um mecanismo robusto de detecção e correção de erros:
+
+```
+Cliente                                 Servidor
+  │                                      │
+  ├─ Send Chunk (50KB)                   ├─ Receive & Validate
+  │                                      │   ├─ Size check
+  │                                      │   └─ Data integrity
+  │                                      │
+  └─ Wait for Response                   └─ Send Response
+                                             ├─ ACK (✅ OK)
+                                             └─ NACK (❌ Error)
+
+Em caso de NACK:
+  ├─ Log warning com posição do erro
+  ├─ Volta file pointer para chunk anterior
+  ├─ Reenvia chunk automaticamente
+  └─ Conta tentativas (máx 5 por bloco)
+```
+
+**Cenários que geram NACK:**
+- **Chunk vazio**: Servidor não recebe dados
+- **Tamanho incorreto**: Chunk menor que esperado
+- **Timeout de rede**: Perda de pacotes TCP
+- **Corrupção de dados**: Dados inconsistentes
 
 ## 🛠️ Tecnologias Utilizadas
 
@@ -101,8 +129,7 @@ mkdir -p input output
 
 3. **Crie um arquivo de teste**:
 ```bash
-# Arquivo de 10MB para teste
-dd if=/dev/zero of=input/big_file.txt bs=1M count=10
+python3 create_big_file.py
 ```
 
 ### Execução
@@ -151,10 +178,10 @@ python client.py
 
 ### Testes de Stress
 
-1. **Arquivo Grande** (100MB):
-```bash
-dd if=/dev/zero of=input/big_file.txt bs=1M count=100
-python client.py
+1. **Arquivo Grande**:
+Modifique o script `create_big_file.py` para gerar um arquivo maior, depois execute:
+```python
+python3 create_big_file.py
 ```
 
 2. **Múltiplos Clientes**:
@@ -166,20 +193,18 @@ python client.py &
 ```
 
 3. **Teste de Falhas**:
-- Interrompa o cliente durante a transferência (Ctrl+C)
+- Interrompa o cliente ou o servidor durante a transferência (Ctrl+C)
 
-### Verificação de Resultados
-
+4. **Teste do Sistema NACK**:
 ```bash
-# Compare checksums
-md5sum input/big_file.txt
-md5sum output/server_received_*_big_file.txt
+# Para demonstrar a importância do tratamento NACK,
+# Descomente as linhas 160-163 no client.py
+# Observe como o arquivo final terá checksum diferente
 
-# Verifique logs coloridos no terminal
-# Verde: ✅ Sucesso
-# Vermelho: ❌ Erros
-# Azul: 🔵 Blocos
-# Ciano: 🔷 Coordenador
+# Linhas para descomentar:
+# logging.error(f"{Colors.RED}[Block {block_id}]{Colors.RESET} Aborting block due to NACK (test mode)")
+# client.close()
+# return False
 ```
 
 ## ✨ Funcionalidades Implementadas
@@ -189,24 +214,30 @@ md5sum output/server_received_*_big_file.txt
 - ✅ **Verificação MD5**: Integridade garantida
 - ✅ **Autenticação**: Sistema de credenciais com prioridades
 - ✅ **Thread Safety**: Sincronização segura entre threads
+- ✅ **NACK Handling**: Detecção e correção automática de chunks corrompidos
+- ✅ **Retry Logic**: Reenvio automático de blocos com falhas
 
 ### Interface e UX
 - ✅ **Logs Coloridos**: ANSI colors para melhor visualização
 - ✅ **Barra de Progresso**: TQDM para acompanhamento
 - ✅ **Logs Estruturados**: Identificação clara por componente
 - ✅ **Tratamento de Erros**: Mensagens informativas
+- ✅ **Transfer Statistics**: Métricas detalhadas de qualidade da transferência
+- ✅ **NACK Monitoring**: Visualização de chunks rejeitados e retry automático
 
 ### Robustez
 - ✅ **Graceful Shutdown**: Encerramento controlado com SIGINT/SIGTERM
-- ✅ **Timeout Handling**: Timeouts configuráveis por operação
 - ✅ **Resource Cleanup**: Liberação adequada de recursos
 - ✅ **Error Recovery**: Continuação mesmo com falhas parciais
+- ✅ **Block Retry System**: Até 3 tentativas por bloco com backoff
+- ✅ **Chunk Validation**: Verificação individual de chunks (50KB cada)
+- ✅ **Signal Handlers**: Shutdown gracioso em cliente e servidor
 
 ### Organização
 - ✅ **Modularização**: Código separado por responsabilidades
 - ✅ **Configurabilidade**: Constantes facilmente ajustáveis
 - ✅ **Output Directory**: Arquivos organizados em pasta separada
-- ✅ **Logging Profissional**: Timestamps e níveis apropriados
+- ✅ **Logging**: Timestamps e níveis apropriados
 
 ## 🔮 Possíveis Melhorias Futuras
 
@@ -217,8 +248,6 @@ md5sum output/server_received_*_big_file.txt
 - 🚧 **Adaptive Parallelism**: Ajuste automático do número de threads
 
 ### Robustez
-- 🚧 **Retry Logic**: Tentativas automáticas para blocos falhados
-- 🚧 **Resume Transfer**: Continuação de transferências interrompidas
 - 🚧 **Checksum Parcial**: Verificação por bloco (não apenas arquivo completo)
 - 🚧 **Rate Limiting**: Controle de velocidade de transferência
 
@@ -239,8 +268,18 @@ md5sum output/server_received_*_big_file.txt
 
 ```
 📁 Arquivos: 6
-📝 Linhas de Código: ~800
+📝 Linhas de Código: ~1200
 🧵 Threads Máximas: 14 (4 client + 10 server)
 📦 Tamanho do Bloco: 200KB
 🔀 Paralelização: 4x
+🔄 Sistema NACK: Retry automático de chunks
+🛡️ Max Retries: 3 tentativas por bloco
 ```
+
+### Funcionalidades Avançadas Implementadas
+
+- **🔴 NACK System**: Detecção e correção automática de chunks corrompidos
+- **🟡 Graceful Shutdown**: Signal handlers (SIGINT/SIGTERM) em cliente e servidor  
+- **🟢 Transfer Statistics**: Métricas detalhadas de qualidade (NACKs, retries, falhas)
+- **🔵 Chunk Validation**: Verificação individual de integridade por chunk
+- **🟣 Auto-retry Logic**: Até 3 tentativas por bloco com delays progressivos

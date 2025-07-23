@@ -154,8 +154,14 @@ def send_file_block(block_id, start_pos, block_size, filename, original_md5, tot
                                 transfer_stats['nacks_received'] += 1
                                 transfer_stats['chunks_failed'] += 1
                             
-                            logging.warning(f"{Colors.YELLOW}[Block {block_id}]{Colors.RESET} {Colors.RED}NACK received{Colors.RESET} for chunk at position {sent_bytes - len(data)} (chunk {math.ceil(sent_bytes/CHUNK_SIZE)}/{total_chunks})")
                             
+                            logging.warning(f"{Colors.YELLOW}[Block {block_id}]{Colors.RESET} {Colors.RED}NACK received{Colors.RESET} for chunk at position {sent_bytes - len(data)} (chunk {math.ceil(sent_bytes/CHUNK_SIZE)}/{total_chunks})")
+
+                            # TEST: Abort block transfer on NACK instead of retrying
+                            # logging.error(f"{Colors.RED}[Block {block_id}]{Colors.RESET} Aborting block due to NACK (test mode)")
+                            # client.close()
+                            # return False
+
                             # Move file pointer back to retry this chunk
                             f.seek(start_pos + sent_bytes - len(data))
                             sent_bytes -= len(data)
@@ -169,12 +175,12 @@ def send_file_block(block_id, start_pos, block_size, filename, original_md5, tot
                             time.sleep(0.1)  # Brief delay before retry
                             continue
                             
-                        elif "ERROR" in ack:
-                            logging.error(f"{Colors.RED}[Block {block_id}]{Colors.RESET} Transfer error: {ack}")
+                        if "BLOCK_ERROR" in ack:
+                            logging.error(f"{Colors.RED}[Block {block_id}]{Colors.RESET} Server block error: {ack}")
                             client.close()
                             return False
-                        elif "ACK" not in ack:
-                            logging.warning(f"{Colors.YELLOW}[Block {block_id}]{Colors.RESET} Unexpected response: {ack}")
+                        elif ack not in ["ACK", "NACK"]:
+                            logging.warning(f"{Colors.YELLOW}[Block {block_id}]{Colors.RESET} Unexpected chunk response: {ack}")
                     
                     except socket.timeout:
                         logging.warning(f"{Colors.YELLOW}[Block {block_id}]{Colors.RESET} Timeout waiting for ACK")
@@ -207,7 +213,7 @@ def send_file_block(block_id, start_pos, block_size, filename, original_md5, tot
         except Exception as e:
             logging.error(f"{Colors.RED}[Block {block_id}]{Colors.RESET} Error (attempt {retry_count + 1}/{max_retries}): {e}")
             retry_count += 1
-            
+
             with transfer_stats['lock']:
                 transfer_stats['retries_attempted'] += 1
             
