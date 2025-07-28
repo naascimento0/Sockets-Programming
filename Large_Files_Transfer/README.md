@@ -1,6 +1,6 @@
 # 🚀 Large Files Transfer System
 
-Um sistema robusto de transferência de arquivos grandes através de TCP sockets com paralelização, verificação de integridade e recuperação de falhas.
+Um sistema robusto de transferência de arquivos grandes através de TCP sockets com paralelização, verificação de integridade, recuperação de falhas e ajuste automático baseado no tamanho do arquivo.
 
 ## 📋 Descrição
 
@@ -9,11 +9,12 @@ Este projeto implementa um sistema cliente-servidor para transferência eficient
 ### Desafios Abordados
 
 1. **Transferência de Arquivos Grandes**: Divisão em blocos para evitar limitações de memória
-2. **Paralelização**: Múltiplas conexões simultâneas para maximizar throughput
+2. **Paralelização Inteligente**: Múltiplas conexões com ajuste automático baseado no arquivo
 3. **Verificação de Integridade**: Checksums MD5 para garantir integridade dos dados
 4. **Recuperação de Falhas**: Capacidade de identificar e tratar blocos faltantes
 5. **Autenticação**: Sistema de credenciais com prioridades
 6. **Thread Safety**: Sincronização segura entre threads
+7. **Otimização por Arquivo**: Ajuste automático de threads e tamanhos baseado no arquivo
 
 ### Arquitetura do Sistema
 
@@ -23,9 +24,11 @@ Este projeto implementa um sistema cliente-servidor para transferência eficient
 ├─────────────────┤                    ├─────────────────┤
 │  main()         │                    │  main()         │
 │  ├─ Coordinator ├────────────────────┤  ├─ Queue       │
-│  └─ 4x Threads  │                    │  └─ ThreadPool  │
-│      send_file_ │                    │     (10 workers)│
+│  └─ N Threads   │ ←── Auto-sized ───┤  └─ ThreadPool  │
+│      send_file_ │                    │     (optimized) │
 │      block()    │                    │                 │
+│  ├─ Optimizer   │                    │  ├─ Optimizer   │
+│      by_size()  │                    │      by_size()  │
 └─────────────────┘                    └─────────────────┘
 ```
 
@@ -64,6 +67,19 @@ Arquivo Original (2MB)
 ├─ Block 2: 400-600KB   └─ (4 chunks de 50KB)
 └─ Block 3: 600-800KB   └─ (4 chunks de 50KB)
 ```
+
+### Sistema de Ajuste Automático por Tamanho
+
+O sistema ajusta automaticamente a configuração baseada no tamanho do arquivo:
+
+| Tamanho do Arquivo | Threads | Tamanho do Bloco | Tamanho do Chunk |
+|-------------------|---------|------------------|------------------|
+| < 1MB (very_small) | 2       | 128KB           | 32KB            |
+| 1-10MB (small)     | 3       | 200KB           | 50KB            |
+| 10-100MB (medium)  | 4       | 512KB           | 64KB            |
+| 100-500MB (large) | 6       | 1MB             | 128KB           |
+| 500MB-1GB (very_large) | 8   | 2MB             | 256KB           |
+| > 1GB (huge)      | 12      | 4MB             | 512KB           |
 
 ### Sistema NACK (Negative Acknowledgment)
 
@@ -144,20 +160,38 @@ python server.py
 python client.py
 ```
 
-### Configurações
+### 🎯 Sistema de Otimização Automática
 
-Edite as constantes nos arquivos para ajustar:
+O sistema ajusta automaticamente as configurações baseado no tamanho do arquivo:
 
-**client.py / server.py**:
-```python
-SERVER = "localhost"          # IP do servidor
-PORT = 4455                   # Porta de comunicação
-CHUNK_SIZE = 1024 * 50        # 50KB por chunk
-BLOCK_SIZE = 1024 * 200       # 200KB por bloco
-MAX_PARALLEL_BLOCKS = 4       # Threads simultâneas
+#### Como Funciona
+
+1. **Detecção do Arquivo**: O sistema analisa o tamanho do arquivo a ser transferido
+2. **Categorização**: Classifica em 6 categorias (very_small até huge)
+3. **Otimização**: Ajusta threads, blocos e chunks automaticamente
+4. **Aplicação**: Usa as configurações otimizadas durante a transferência
+
+#### Exemplo de Logs
+
+```bash
+[FILE OPTIMIZER] Otimização para big_file.txt (350.5MB, categoria: large)
+[FILE OPTIMIZER] Threads: 6, Block: 1024KB, Chunk: 128KB
+[FILE OPTIMIZER] Total de blocos: 342, Chunks por bloco: 8
 ```
 
-**auth.py**:
+### Configurações
+
+As configurações são ajustadas automaticamente, mas você pode modificar os thresholds em `file_optimizer.py`:
+
+**Configurações Automáticas**:
+```python
+# O sistema ajusta automaticamente:
+# - Número de threads (2-12)
+# - Tamanho do bloco (128KB-4MB)  
+# - Tamanho do chunk (32KB-512KB)
+```
+
+**Configurações Manuais** (auth.py):
 ```python
 CREDENTIALS = {
     "admin": {"password": "admin123", "priority": 1},
@@ -239,13 +273,47 @@ python client.py &
 - ✅ **Output Directory**: Arquivos organizados em pasta separada
 - ✅ **Logging**: Timestamps e níveis apropriados
 
+### 🆕 Otimização por Tamanho de Arquivo
+- ✅ **Auto-sizing**: Ajuste automático baseado no tamanho do arquivo
+- ✅ **Thread Optimization**: Número ideal de threads por categoria de arquivo
+- ✅ **Block/Chunk Sizing**: Tamanhos otimizados para cada cenário
+- ✅ **Category-based**: 6 categorias de arquivo com configurações específicas
+
+## 🎯 Sistema de Otimização Baseada em Arquivo
+
+### Como Funciona
+
+O sistema analisa o tamanho do arquivo e ajusta automaticamente:
+
+1. **Número de Threads**: De 2 (arquivos pequenos) até 12 (arquivos enormes)
+2. **Tamanho do Bloco**: De 128KB até 4MB baseado no arquivo
+3. **Tamanho do Chunk**: De 32KB até 512KB para melhor eficiência
+4. **Categoria**: Classifica em very_small, small, medium, large, very_large, huge
+
+### Lógica de Decisão
+
+```python
+# Categorização por tamanho
+if file_size < 1MB:      category = 'very_small'  # 2 threads, 128KB blocks
+elif file_size < 10MB:   category = 'small'       # 3 threads, 200KB blocks  
+elif file_size < 100MB:  category = 'medium'      # 4 threads, 512KB blocks
+elif file_size < 500MB:  category = 'large'       # 6 threads, 1MB blocks
+elif file_size < 1GB:    category = 'very_large'  # 8 threads, 2MB blocks
+else:                    category = 'huge'        # 12 threads, 4MB blocks
+```
+
 ## 🔮 Possíveis Melhorias Futuras
 
 ### Performance
 - 🚧 **Compressão**: Implementar compressão de dados (gzip/lz4)
 - 🚧 **Buffer Otimizado**: Ajuste dinâmico de tamanhos de chunk/bloco
 - 🚧 **Connection Pooling**: Reutilização de conexões TCP
-- 🚧 **Adaptive Parallelism**: Ajuste automático do número de threads
+- ✅ **Adaptive Sizing**: Ajuste automático baseado no tamanho do arquivo
+
+### Otimização Avançada
+- 🚧 **Network-aware**: Considerar latência e bandwidth da rede
+- 🚧 **Hardware-aware**: Considerar CPU e memória disponível
+- 🚧 **Dynamic Adjustment**: Ajuste em tempo real durante transferência
 
 ### Robustez
 - 🚧 **Checksum Parcial**: Verificação por bloco (não apenas arquivo completo)
