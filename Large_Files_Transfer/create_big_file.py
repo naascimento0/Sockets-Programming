@@ -33,4 +33,8 @@ if __name__ == "__main__":
     size_mb = input("Type the size of the file in MB (default is 5MB): ")
     size_mb = int(size_mb) if size_mb else 5  # File size in MB
 
+    # Ensure output directory exists
+    input_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "input")
+    os.makedirs(input_dir, exist_ok=True)
+
     generate_large_file(filename, size_mb)
