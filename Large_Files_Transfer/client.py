@@ -9,6 +9,7 @@ import math
 import signal
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from file_optimizer import file_optimizer
 
 # ANSI color codes for terminal output
 class Colors:
@@ -22,7 +23,7 @@ class Colors:
     CYAN = '\033[96m'
     WHITE = '\033[97m'
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s', force=True)
 
 # Global variables for graceful shutdown
 shutdown_event = threading.Event()
@@ -36,9 +37,7 @@ SIZE = 1024
 CHUNK_SIZE = 1024 * 50   # 50KB - same as the server
 BLOCK_SIZE = 1024 * 200  # 200KB - same as the server
 FORMAT = 'utf-8'
-FILENAME = "input/big_file.txt"
-FILESIZE = os.path.getsize(FILENAME) if os.path.exists(FILENAME) else 0
-MAX_PARALLEL_BLOCKS = 4
+FILENAME = "input/file.txt"
 
 USERNAME = "admin"  # Fixed credentials for testing
 PASSWORD = "admin123"
@@ -134,7 +133,7 @@ def send_file_block(block_id, start_pos, block_size, filename, original_md5, tot
                         client.close()
                         return False
                         
-                    chunk_size = min(CHUNK_SIZE, block_size - sent_bytes) # 50KB
+                    chunk_size = min(CHUNK_SIZE, block_size - sent_bytes) # Use optimized CHUNK_SIZE
                     data = f.read(chunk_size)
                     
                     if not data:
@@ -155,7 +154,7 @@ def send_file_block(block_id, start_pos, block_size, filename, original_md5, tot
                                 transfer_stats['chunks_failed'] += 1
                             
                             
-                            logging.warning(f"{Colors.YELLOW}[Block {block_id}]{Colors.RESET} {Colors.RED}NACK received{Colors.RESET} for chunk at position {sent_bytes - len(data)} (chunk {math.ceil(sent_bytes/CHUNK_SIZE)}/{total_chunks})")
+                            logging.warning(f"{Colors.YELLOW}[Block {block_id}]{Colors.RESET} {Colors.RED}NACK received{Colors.RESET} for chunk {math.ceil(sent_bytes/CHUNK_SIZE)}/{total_chunks}")
 
                             # TEST: Abort block transfer on NACK instead of retrying
                             # logging.error(f"{Colors.RED}[Block {block_id}]{Colors.RESET} Aborting block due to NACK (test mode)")
@@ -180,10 +179,9 @@ def send_file_block(block_id, start_pos, block_size, filename, original_md5, tot
                             client.close()
                             return False
                         elif ack not in ["ACK", "NACK"]:
-                            logging.warning(f"{Colors.YELLOW}[Block {block_id}]{Colors.RESET} Unexpected chunk response: {ack}")
+                            logging.warning(f"{Colors.YELLOW}[Block {block_id}]{Colors.RESET} Unexpected response: {ack}")
                     
                     except socket.timeout:
-                        logging.warning(f"{Colors.YELLOW}[Block {block_id}]{Colors.RESET} Timeout waiting for ACK")
                         chunk_failures += 1
                         if chunk_failures >= 5:
                             client.close()
@@ -193,20 +191,11 @@ def send_file_block(block_id, start_pos, block_size, filename, original_md5, tot
             try:
                 completion = client.recv(SIZE).decode(FORMAT)
                 success = "BLOCK_OK" in completion
-                
-                if success:
-                    if chunk_failures > 0:
-                        logging.info(f"{Colors.GREEN}[Block {block_id}]{Colors.RESET} Transfer completed successfully {Colors.YELLOW}({chunk_failures} chunk retries){Colors.RESET}")
-                    else:
-                        logging.info(f"{Colors.GREEN}[Block {block_id}]{Colors.RESET} Transfer completed successfully")
-                else:
-                    logging.error(f"{Colors.RED}[Block {block_id}]{Colors.RESET} Transfer failed: {completion}")
-                    
                 client.close()
                 return success
                 
             except socket.timeout:
-                logging.error(f"{Colors.RED}[Block {block_id}]{Colors.RESET} Timeout waiting for block completion")
+                logging.error(f"{Colors.RED}[Block {block_id}]{Colors.RESET} ❌ Timeout")
                 client.close()
                 return False
             
@@ -218,10 +207,9 @@ def send_file_block(block_id, start_pos, block_size, filename, original_md5, tot
                 transfer_stats['retries_attempted'] += 1
             
             if retry_count < max_retries:
-                logging.info(f"{Colors.YELLOW}[Block {block_id}]{Colors.RESET} Retrying in 2 seconds...")
                 time.sleep(2)
             else:
-                logging.error(f"{Colors.RED}[Block {block_id}]{Colors.RESET} Max retries reached, giving up")
+                logging.error(f"{Colors.RED}[Block {block_id}]{Colors.RESET} ❌ Max retries reached")
                 return False
     
     return False
@@ -245,8 +233,16 @@ def main():
         logging.error(f"{Colors.RED}[!] File {FILENAME} is empty!{Colors.RESET}")
         return
 
+    # Get optimized configurations based on file size
+    optimization_info = file_optimizer.log_optimization_info(filesize, FILENAME)
+    
+    # Use optimized sizes
+    global CHUNK_SIZE, BLOCK_SIZE, MAX_PARALLEL_BLOCKS
+    CHUNK_SIZE = optimization_info['chunk_size']
+    BLOCK_SIZE = optimization_info['block_size']
+    MAX_PARALLEL_BLOCKS = optimization_info['threads']
+
     # Calculate MD5 of original file
-    logging.info(f"{Colors.CYAN}CLIENT: [+] Calculating MD5 checksum...{Colors.RESET}")
     original_md5 = calculate_md5(FILENAME)
     if not original_md5:
         logging.error(f"{Colors.RED}[!] Failed to calculate MD5{Colors.RESET}")
@@ -254,16 +250,16 @@ def main():
 
     logging.info(f"{Colors.CYAN}CLIENT: [+] File: {Colors.BOLD}{FILENAME}{Colors.RESET}, Size: {filesize} bytes")
     
-    # Calculate blocks
+    # Calculate blocks with optimized block size
     total_blocks = math.ceil(filesize / BLOCK_SIZE)
-    logging.info(f"{Colors.CYAN}CLIENT: [+] Splitting file into {total_blocks} blocks of {BLOCK_SIZE} bytes each{Colors.RESET}")
+    logging.info(f"{Colors.CYAN}CLIENT: [+] Splitting file into {total_blocks} blocks of {BLOCK_SIZE//1024}KB each{Colors.RESET}")
+    logging.info(f"{Colors.CYAN}CLIENT: [+] Using {MAX_PARALLEL_BLOCKS} parallel transfers with {CHUNK_SIZE//1024}KB chunks{Colors.RESET}")
     
     try:
         # Create main connection to coordinate transfer
         coordinator_conn = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         coordinator_conn.settimeout(60.0)  # Set timeout for coordinator
         coordinator_conn.connect(ADDR)
-        logging.info(f"{Colors.CYAN}CLIENT: [+] Connected to server {SERVER}:{PORT}{Colors.RESET}")
 
         # Send credentials for coordinator
         credentials = f"{USERNAME}:{PASSWORD}"
@@ -275,8 +271,8 @@ def main():
             logging.error(f"{Colors.RED}[!] Authentication failed{Colors.RESET}")
             return
 
-        # Send file metadata for coordination
-        metadata = f"FILE_START@{FILENAME}@{filesize}@{total_blocks}@{original_md5}"
+        # Send file metadata for coordination (including optimization information)
+        metadata = f"FILE_START@{FILENAME}@{filesize}@{total_blocks}@{original_md5}@{CHUNK_SIZE}@{BLOCK_SIZE}"
         coordinator_conn.send(metadata.encode(FORMAT))
         
         # Receive coordination confirmation
@@ -326,7 +322,6 @@ def main():
                         progress_bar.update(block_size)
                     else:
                         failed_blocks.append(block_id)
-                        logging.error(f"{Colors.RED}[!] Block {block_id} failed{Colors.RESET}")
                 except Exception as e:
                     failed_blocks.append(block_id)
                     logging.error(f"{Colors.RED}[!] Block {block_id} exception: {e}{Colors.RESET}")
@@ -337,7 +332,6 @@ def main():
             executor.shutdown(wait=True)
 
         if shutdown_event.is_set():
-            logging.info(f"{Colors.YELLOW}[+] Transfer interrupted by shutdown{Colors.RESET}")
             coordinator_conn.send("TRANSFER_FAILED".encode(FORMAT))
             return
 
@@ -349,7 +343,7 @@ def main():
         # Display transfer statistics
         with transfer_stats['lock']:
             if transfer_stats['nacks_received'] > 0 or transfer_stats['chunks_failed'] > 0:
-                logging.info(f"\n{Colors.CYAN}[TRANSFER STATISTICS]{Colors.RESET}")
+                logging.info(f"{Colors.CYAN}[TRANSFER STATISTICS]{Colors.RESET}")
                 logging.info(f"  Total NACKs received: {Colors.RED}{transfer_stats['nacks_received']}{Colors.RESET}")
                 logging.info(f"  Chunks that failed: {Colors.RED}{transfer_stats['chunks_failed']}{Colors.RESET}")
                 logging.info(f"  Block retries attempted: {Colors.YELLOW}{transfer_stats['retries_attempted']}{Colors.RESET}")
@@ -388,7 +382,6 @@ def main():
                 coordinator_conn.close()
             except:
                 pass
-        logging.info(f"{Colors.GREEN}[+] Client finished{Colors.RESET}")
 
 if __name__ == "__main__":
     main()

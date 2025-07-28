@@ -28,7 +28,9 @@ def generate_large_file(filename, size_mb):
 
 if __name__ == "__main__":
     # Configuration
-    filename = "input/big_file.txt"
-    size_mb = 5  # File size in MB
+    filename = input("Enter the filename to create (default is 'big_file.txt'): ")
+    filename = "input/" + filename if filename else "input/big_file.txt"
+    size_mb = input("Type the size of the file in MB (default is 5MB): ")
+    size_mb = int(size_mb) if size_mb else 5  # File size in MB
 
     generate_large_file(filename, size_mb)
